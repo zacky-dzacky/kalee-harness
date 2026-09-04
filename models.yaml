@@ -1,0 +1,126 @@
+# Kalee model registry — runtime data, never bundled as constants.
+#
+# `caps` for hosted models are declared from vendor docs. For local backends they are a
+# starting guess: run `kalee doctor <id>` to probe the endpoint and write the real values
+# back into this file. Capabilities vary per *model*, not per provider.
+
+models:
+  - id: opus-5
+    provider: anthropic
+    apiModel: claude-opus-5
+    pricing: { input: 5.00, output: 25.00, cacheRead: 0.50, cacheWrite: 6.25 }
+    caps:
+      nativeToolCalls: true
+      parallelToolCalls: true
+      reasoning: always-on
+      explicitCacheBreakpoints: true
+      strictToolSchemas: true
+      maxContext: 1000000
+      vision: true
+
+  - id: sonnet-5
+    provider: anthropic
+    apiModel: claude-sonnet-5
+    pricing: { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 }
+    caps:
+      nativeToolCalls: true
+      parallelToolCalls: true
+      reasoning: always-on
+      explicitCacheBreakpoints: true
+      strictToolSchemas: true
+      maxContext: 1000000
+      vision: true
+
+  - id: haiku-4-5
+    provider: anthropic
+    apiModel: claude-haiku-4-5-20251001
+    pricing: { input: 1.00, output: 5.00, cacheRead: 0.10, cacheWrite: 1.25 }
+    caps:
+      nativeToolCalls: true
+      parallelToolCalls: true
+      reasoning: effort
+      explicitCacheBreakpoints: true
+      strictToolSchemas: true
+      maxContext: 200000
+      vision: true
+
+  - id: gpt-5
+    provider: openai
+    apiModel: gpt-5
+    pricing: { input: 1.25, output: 10.00, cacheRead: 0.125 }
+    caps:
+      nativeToolCalls: true
+      parallelToolCalls: true
+      reasoning: effort
+      explicitCacheBreakpoints: false
+      strictToolSchemas: true
+      maxContext: 400000
+      vision: true
+
+  - id: gemini-3-pro
+    provider: google
+    apiModel: gemini-3-pro-preview
+    pricing: { input: 2.00, output: 12.00, cacheRead: 0.20 }
+    caps:
+      nativeToolCalls: true
+      parallelToolCalls: true
+      reasoning: budget
+      explicitCacheBreakpoints: true
+      strictToolSchemas: false
+      maxContext: 1048576
+      vision: true
+
+  # --- local backends: openai.ts + baseURL override ------------------------------------
+  # A small model most people already have locally — handy for `kalee doctor` and for a
+  # cheap verify role. Probe it before trusting these caps.
+  - id: local-qwen7b
+    provider: openai
+    baseURL: http://localhost:11434/v1     # Ollama
+    apiKeyEnv: OLLAMA_API_KEY
+    apiModel: qwen2.5:7b
+    pricing: { input: 0, output: 0 }
+    caps:
+      nativeToolCalls: true
+      parallelToolCalls: false
+      reasoning: none
+      explicitCacheBreakpoints: false
+      strictToolSchemas: false
+      maxContext: 32768
+      vision: false
+
+  - id: local-qwen
+    provider: openai
+    baseURL: http://localhost:11434/v1     # Ollama
+    apiKeyEnv: OLLAMA_API_KEY              # unused by Ollama; a placeholder is sent
+    apiModel: qwen2.5-coder:32b
+    pricing: { input: 0, output: 0 }
+    caps:
+      nativeToolCalls: true
+      parallelToolCalls: false
+      reasoning: none
+      explicitCacheBreakpoints: false
+      strictToolSchemas: false
+      maxContext: 32768
+      vision: false
+
+  - id: mlx-devstral
+    provider: openai
+    baseURL: http://localhost:8080/v1      # mlx_lm.server
+    apiKeyEnv: MLX_API_KEY
+    apiModel: mlx-community/Devstral-Small-2507-4bit
+    pricing: { input: 0, output: 0 }
+    caps:
+      nativeToolCalls: false               # -> shim; confirm with `kalee doctor mlx-devstral`
+      parallelToolCalls: false
+      reasoning: none
+      explicitCacheBreakpoints: false
+      strictToolSchemas: false
+      maxContext: 32768
+      vision: false
+
+# Role-based assignment. Scan and verify are separate contexts already, so per-role models
+# cost nothing in cache invalidation and unlock `kalee eval sweep`.
+roles:
+  scan: opus-5
+  verify: opus-5
+  default: opus-5

@@ -1,0 +1,16 @@
+{
+  "case": "null-deref",
+  "description": "profile is optional on User but greeting() dereferences it after only checking that the user exists.",
+  "bugs": [
+    {
+      "file": "user.ts",
+      "line": 24,
+      "tolerance": 3,
+      "category": "correctness",
+      "hint": "user.profile is optional; a user registered without a profile makes greeting() throw on property access."
+    }
+  ],
+  "traps": [
+    { "file": "user.ts", "line": 22, "why": "the `if (!user)` guard is correct and complete for the user itself." }
+  ]
+}

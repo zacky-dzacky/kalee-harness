@@ -1,0 +1,29 @@
+{
+  "name": "kalee-harness",
+  "version": "0.1.0",
+  "description": "Kalee Harness — a model-agnostic agent harness with a code-review capability",
+  "type": "module",
+  "module": "src/cli.ts",
+  "bin": { "kalee": "./src/cli.ts" },
+  "scripts": {
+    "kalee": "bun run src/cli.ts",
+    "build": "bun build --compile --outfile dist/kalee src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "@google/genai": "^1.30.0",
+    "openai": "^6.9.0",
+    "commander": "^14.0.2",
+    "picocolors": "^1.1.1",
+    "yaml": "^2.8.1",
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.24.6"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.3"
+  },
+  "private": true
+}

@@ -1,0 +1,17 @@
+{
+  "case": "off-by-one",
+  "description": "lastPageIndex returns -1 for an empty collection, so summarize's loop is skipped; but for total exactly divisible it is correct — the trap is that paginate itself is fine.",
+  "bugs": [
+    {
+      "file": "paginate.ts",
+      "line": 18,
+      "tolerance": 3,
+      "category": "correctness",
+      "hint": "lastPageIndex(0, n) returns -1; callers that treat it as a count or index into an array underflow."
+    }
+  ],
+  "traps": [
+    { "file": "paginate.ts", "line": 12, "why": "slice() clamps out-of-range indices, so start/end past the end is correct, not a bug." },
+    { "file": "paginate.ts", "line": 14, "why": "hasMore using `end < all.length` is correct for the final page." }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "case": "race-shared-state",
+  "description": "check-then-act across an await: concurrent callers for the same key all miss the cache and all run the loader. The inflight map exists but is never used.",
+  "bugs": [
+    {
+      "file": "cache.ts",
+      "line": 9,
+      "tolerance": 4,
+      "category": "concurrency",
+      "hint": "cache.has() is checked before an await; N concurrent callers with the same key each invoke load(), defeating the cache and duplicating side effects."
+    }
+  ],
+  "traps": [
+    { "file": "cache.ts", "line": 15, "why": "invalidate() deleting a key is correct in a single-threaded event loop." }
+  ]
+}

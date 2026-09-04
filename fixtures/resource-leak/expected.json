@@ -1,0 +1,16 @@
+{
+  "case": "resource-leak",
+  "description": "The error path inside the change handler closes the watcher but never clears the interval timer, leaking it and keeping the process alive.",
+  "bugs": [
+    {
+      "file": "watcher.ts",
+      "line": 13,
+      "tolerance": 4,
+      "category": "resource-leak",
+      "hint": "When onChange throws, watcher.close() runs but clearInterval(timer) does not, so the 30s interval keeps firing and holds the event loop open forever."
+    }
+  ],
+  "traps": [
+    { "file": "watcher.ts", "line": 19, "why": "the returned close() correctly releases both resources." }
+  ]
+}

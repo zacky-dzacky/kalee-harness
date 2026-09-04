@@ -1,0 +1,9 @@
+{
+  "case": "clean-refactor",
+  "description": "Correct money formatting and summation. Negative values, missing symbols, empty input and mixed currencies are all handled. Must produce zero findings.",
+  "bugs": [],
+  "traps": [
+    { "file": "format.ts", "why": "Math.abs before splitting whole/frac makes negative amounts format correctly; the sign is reapplied." },
+    { "file": "format.ts", "line": 19, "why": "the empty-array case returns early, so items[0]! is safe." }
+  ]
+}

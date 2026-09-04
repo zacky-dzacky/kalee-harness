@@ -1,0 +1,17 @@
+{
+  "case": "wrong-order-args",
+  "description": "nearest() passes the candidate's lon where distanceKm expects lat and vice versa.",
+  "bugs": [
+    {
+      "file": "geo.ts",
+      "line": 22,
+      "tolerance": 3,
+      "category": "correctness",
+      "hint": "distanceKm(lat1, lon1, lat2, lon2) is called with (from.lat, from.lon, c.lon, c.lat) — the candidate's coordinates are swapped, so the wrong point is returned."
+    }
+  ],
+  "traps": [
+    { "file": "geo.ts", "line": 11, "why": "the haversine formula itself is correct." },
+    { "file": "geo.ts", "line": 19, "why": "initialising bestDist to Infinity is correct." }
+  ]
+}

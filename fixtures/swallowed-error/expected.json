@@ -1,0 +1,16 @@
+{
+  "case": "swallowed-error",
+  "description": "syncAll silently drops upload failures, and syncAndMarkClean discards local state regardless of whether anything actually uploaded.",
+  "bugs": [
+    {
+      "file": "sync.ts",
+      "line": 25,
+      "tolerance": 4,
+      "category": "error-handling",
+      "hint": "markLocalStateClean() runs unconditionally, so failed uploads lose their local copy — data loss."
+    }
+  ],
+  "traps": [
+    { "file": "sync.ts", "line": 8, "why": "throwing on a non-ok response is correct." }
+  ]
+}

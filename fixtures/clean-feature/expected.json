@@ -1,0 +1,9 @@
+{
+  "case": "clean-feature",
+  "description": "Correct exponential-backoff retry. The last attempt does not sleep, the abort listener clears its timer, and the original error is rethrown. Must produce zero findings.",
+  "bugs": [],
+  "traps": [
+    { "file": "retry.ts", "line": 18, "why": "breaking on the final attempt avoids a pointless trailing sleep; the error is still thrown below." },
+    { "file": "retry.ts", "line": 29, "why": "the abort listener clears the timeout, so no timer is leaked." }
+  ]
+}
