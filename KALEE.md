@@ -81,12 +81,8 @@ because a reviewer that flags everything scores perfect recall.
 
 ## Setup
 
-```sh
-bun install
-export ANTHROPIC_API_KEY=...          # or OPENAI_API_KEY / GEMINI_API_KEY
-bun run src/cli.ts review --base main
-bun run build                          # single binary at dist/kalee
-```
+See [README.md](README.md) for installation. In short: `./scripts/install.sh` for a standalone
+binary, or `bun install && bun link` to run from source.
 
-Local backends need no key: start Ollama or `mlx_lm.server`, then
-`kalee doctor local-qwen7b` to record what that model can actually do.
+Local backends need no key: start Ollama or `mlx_lm.server`, then `kalee doctor <model>` to
+record what that model can actually do.
