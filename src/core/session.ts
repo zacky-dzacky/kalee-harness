@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Block, Turn } from "../model/ir.ts";
@@ -15,6 +15,14 @@ export interface SessionRecord {
   at: string;
   turn: Turn;
   pass: string;
+}
+
+/** One resumable conversation on disk. Sub-agent forks are excluded — see `Session.list`. */
+export interface SessionInfo {
+  id: string;
+  path: string;
+  turns: number;
+  at: Date;
 }
 
 export class Session {
@@ -67,6 +75,46 @@ export class Session {
   fork(pass: string): Session {
     const child = new Session(`${this.id}.${pass}`, dirname(dirname(dirname(this.path))));
     return child;
+  }
+
+  /**
+   * Prime a session with turns it did not produce — how compaction hands a summarized
+   * transcript to its replacement session. These *are* appended, because the replacement's
+   * file is a new record, not a copy of the old one.
+   */
+  seed(turns: Turn[], pass = "seed"): void {
+    for (const t of turns) this.append(t, pass);
+  }
+
+  /**
+   * Reopen an existing conversation for another run. Turns are replayed into memory but not
+   * re-appended: the file already holds them, and writing them twice would double the
+   * transcript the model sees on the run after that.
+   */
+  static async resume(id: string, root: string): Promise<Session> {
+    const s = new Session(id, root);
+    const records = await Session.read(s.path);
+    s.turns = records.map((r) => r.turn);
+    s.seq = records.reduce((max, r) => Math.max(max, r.seq + 1), 0);
+    return s;
+  }
+
+  /** Resumable conversations under `root`, newest first. */
+  static async list(root: string): Promise<SessionInfo[]> {
+    const dir = join(root, ".kalee", "sessions");
+    if (!existsSync(dir)) return [];
+    const out: SessionInfo[] = [];
+    for (const name of await readdir(dir)) {
+      if (!name.endsWith(".jsonl")) continue;
+      const id = name.slice(0, -".jsonl".length);
+      // `fork` names a sub-agent session `<id>.<pass>`. Those are handoff scratch space, not
+      // conversations anyone would want to resume.
+      if (id.includes(".")) continue;
+      const path = join(dir, name);
+      const [st, raw] = await Promise.all([stat(path), readFile(path, "utf8")]);
+      out.push({ id, path, turns: raw.split("\n").filter(Boolean).length, at: st.mtime });
+    }
+    return out.sort((a, b) => b.at.getTime() - a.at.getTime());
   }
 
   static async read(path: string): Promise<SessionRecord[]> {

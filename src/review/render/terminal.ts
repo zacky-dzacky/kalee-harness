@@ -2,6 +2,7 @@ import pc from "picocolors";
 import type { Finding, Severity, Verdict } from "../finding.ts";
 import type { ReviewResult } from "../pipeline.ts";
 import type { Usage } from "../../model/ir.ts";
+import { wrap } from "../../core/text.ts";
 
 const SEVERITY_COLOR: Record<Severity, (s: string) => string> = {
   critical: (s) => pc.bgRed(pc.white(pc.bold(` ${s} `))),
@@ -73,20 +74,4 @@ function footer(
 
 function fmt(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-}
-
-function wrap(text: string, width: number, indent: string): string {
-  const words = text.split(/\s+/);
-  const lines: string[] = [];
-  let line = "";
-  for (const w of words) {
-    if (line.length + w.length + 1 > width) {
-      lines.push(line);
-      line = w;
-    } else {
-      line = line ? `${line} ${w}` : w;
-    }
-  }
-  if (line) lines.push(line);
-  return lines.join(`\n${indent}`);
 }

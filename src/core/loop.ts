@@ -12,7 +12,7 @@ import {
 } from "../model/ir.ts";
 import { costOf, type ModelProvider } from "../model/provider.ts";
 import type { ToolRegistry } from "../tools/index.ts";
-import type { ToolCtx, ToolOutput } from "../tools/types.ts";
+import type { Effect, ToolCtx, ToolOutput } from "../tools/types.ts";
 import { Budget, DEFAULT_LIMITS, type BudgetLimits } from "./budget.ts";
 import type { Policy } from "./policy.ts";
 import type { Session } from "./session.ts";
@@ -42,12 +42,30 @@ export interface LoopOptions {
   /** Structured values a tool handed back (e.g. findings). */
   onEmit?(kind: string, value: unknown): void;
   /**
+   * Live tool-call feedback. The trace records every call too, but only *after* it returns —
+   * an interactive frontend has to show the call the moment it starts, or a slow grep looks
+   * like a hang.
+   */
+  onTool?(event: ToolEvent): void;
+  /**
    * Completion condition for a sub-agent whose task is done the moment it produces its
    * structured output — the verify pass is done when it has a verdict. Without this the loop
    * can only stop when the model volunteers a turn with no tool call, which wastes turns and,
    * on a model that keeps calling, runs all the way to the turn cap.
    */
   stopWhen?(): boolean;
+}
+
+export interface ToolEvent {
+  phase: "start" | "end";
+  name: string;
+  effect: Effect;
+  input: unknown;
+  /** `end` only. */
+  isError?: boolean;
+  durationMs?: number;
+  /** `end` only: a one-line preview of what the tool returned. */
+  preview?: string;
 }
 
 export interface LoopResult {
@@ -103,6 +121,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopResult> {
     const blocks: Block[] = [];
     let usage: Usage = emptyUsage();
     let text = "";
+    let interrupted = false;
 
     try {
       const stream = provider.stream(
@@ -138,12 +157,31 @@ export async function runLoop(opts: LoopOptions): Promise<LoopResult> {
         }
       }
     } catch (e) {
-      const err = e instanceof ProviderError ? e : new ProviderError(String(e), "network", provider.kind, false, e);
-      trace.error(pass, err.kind, err.message);
-      throw err;
+      // An abort raised by the *caller's* signal is a user action (Ctrl-C at the REPL), not a
+      // provider failure. The wall-clock deadline aborts the same controller, so the caller's
+      // signal — not `ctl` — is what distinguishes the two.
+      if (opts.signal?.aborted) {
+        interrupted = true;
+      } else {
+        const err = e instanceof ProviderError ? e : new ProviderError(String(e), "network", provider.kind, false, e);
+        trace.error(pass, err.kind, err.message);
+        throw err;
+      }
     } finally {
       clearTimeout(deadline);
       opts.signal?.removeEventListener("abort", onAbort);
+    }
+
+    if (interrupted) {
+      // Persist the partial *text* and nothing else. A tool_call block with no matching
+      // tool_result is rejected on replay by several providers, but dropping the turn outright
+      // would leave two consecutive user turns, which some of the same providers also reject.
+      const partial = text.trim() ? `${text.trim()}\n\n[interrupted]` : "[interrupted]";
+      session.assistant([{ type: "text", text: partial }], pass);
+      lastText = text;
+      haltReason = "interrupted";
+      trace.note(pass, "interrupted by the caller");
+      break;
     }
 
     const turnCost = costOf(provider.pricing, usage);
@@ -168,7 +206,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopResult> {
     const calls = blocks.filter((b): b is Extract<Block, { type: "tool_call" }> => b.type === "tool_call");
     if (stop !== "tool_call" || calls.length === 0) break;
 
-    const results = await dispatch(calls, { provider, tools, policy, trace, cwd, pass, signal: ctl.signal, onEmit: opts.onEmit });
+    const results = await dispatch(calls, {
+      provider, tools, policy, trace, cwd, pass,
+      signal: ctl.signal,
+      onEmit: opts.onEmit,
+      onTool: opts.onTool,
+    });
 
     // All results go back in ONE user turn. Splitting them across turns teaches the model to
     // stop calling tools in parallel, which is expensive and hard to notice.
@@ -192,6 +235,7 @@ interface DispatchCtx {
   pass: string;
   signal: AbortSignal;
   onEmit?(kind: string, value: unknown): void;
+  onTool?(event: ToolEvent): void;
 }
 
 async function dispatch(
@@ -225,13 +269,33 @@ async function one(
     return errorResult(call.id, `no such tool \`${call.name}\`. Available tools: ${known}`);
   }
 
+  ctx.onTool?.({ phase: "start", name: tool.name, effect: tool.effect, input: call.input });
+
+  /** Every exit from here reports the call as finished, so a frontend never leaves one open. */
+  const finish = (block: Block, isError: boolean, preview: string): Block => {
+    ctx.onTool?.({
+      phase: "end",
+      name: tool.name,
+      effect: tool.effect,
+      input: call.input,
+      isError,
+      durationMs: Date.now() - started,
+      preview,
+    });
+    return block;
+  };
+
   const decision = await ctx.policy.check(tool.name, tool.effect, call.input);
   if (!decision.allowed) {
     ctx.trace.write({
       t: "tool_call", at: now(), pass: ctx.pass, tool: tool.name, effect: tool.effect,
       allowed: false, reason: decision.reason, durationMs: 0, isError: true, input: call.input,
     });
-    return errorResult(call.id, `permission denied: ${decision.reason}`);
+    return finish(
+      errorResult(call.id, `permission denied: ${decision.reason}`),
+      true,
+      `permission denied: ${decision.reason}`,
+    );
   }
 
   // Validate centrally rather than trusting each tool to do it. This is also the
@@ -244,7 +308,8 @@ async function one(
       allowed: true, reason: "invalid arguments", durationMs: Date.now() - started,
       isError: true, input: call.input,
     });
-    return errorResult(call.id, describeToolError(parsed.error));
+    const message = describeToolError(parsed.error);
+    return finish(errorResult(call.id, message), true, message);
   }
 
   let out: ToolOutput;
@@ -268,12 +333,16 @@ async function one(
     allowed: true, durationMs: Date.now() - started, isError: out.isError ?? false, input: call.input,
   });
 
-  return {
-    type: "tool_result",
-    id: call.id,
-    isError: out.isError ?? false,
-    content: [{ type: "text", text: out.content }],
-  };
+  return finish(
+    {
+      type: "tool_result",
+      id: call.id,
+      isError: out.isError ?? false,
+      content: [{ type: "text", text: out.content }],
+    },
+    out.isError ?? false,
+    out.content,
+  );
 }
 
 function errorResult(id: string, message: string): Block {

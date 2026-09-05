@@ -32,6 +32,24 @@ export interface ReviewTarget {
   wholeFile: boolean;
 }
 
+export interface TargetFlags {
+  base?: string;
+  staged?: boolean;
+  repo?: string;
+}
+
+/**
+ * The one place that turns a command line into a `TargetSpec`, shared by `kalee review` and the
+ * REPL's `/review` so the two cannot drift on what a bare number or a bare path means.
+ */
+export function specFrom(arg: string | undefined, flags: TargetFlags): TargetSpec {
+  if (flags.staged) return { kind: "staged" };
+  if (flags.base) return { kind: "range", base: flags.base };
+  if (arg === undefined) return { kind: "working-tree" };
+  if (/^\d+$/.test(arg)) return { kind: "pr", number: Number(arg), repo: flags.repo };
+  return { kind: "path", path: arg };
+}
+
 const g = (cwd: string) => ({ cwd, timeoutMs: 60_000, maxBytes: 8 * 1024 * 1024 });
 
 export async function isGitRepo(cwd: string): Promise<boolean> {

@@ -95,6 +95,36 @@ Local models need no key at all — see [Local models](#local-models).
 
 ## Use
 
+Bare `kalee` opens an interactive session:
+
+```
+$ kalee
+
+  Kalee · opus-5 · ~/kalee-harness (main)
+
+› /review --base main
+  [scan] 3 files…
+  [verify[1/2]] src/session/store.ts:142
+
+  2 findings — main...HEAD
+  high correctness  ✓ confirmed
+  src/session/store.ts:142
+    `lastPageIndex` returns -1 for an empty collection, so the loop below never runs.
+
+› why does that return -1?
+  `findLastIndex` returns -1 when nothing matches, and `store.ts:138` passes that
+  straight through instead of clamping it…
+
+› /model haiku-4-5
+› /exit
+```
+
+The follow-up is the point. One session, one trace, and one cached system prefix span every
+turn, so asking about a finding costs a fraction of the review that produced it. See
+[The session](#the-session).
+
+Or run it one-shot, which is what CI wants:
+
 ```sh
 kalee review                      # working tree vs HEAD
 kalee review --staged             # staged changes only
@@ -102,6 +132,9 @@ kalee review --base main          # merge-base(main, HEAD)..HEAD
 kalee review 1234                 # GitHub PR, via the gh CLI
 kalee review src/auth/            # a path — no diff signal, so a different prompt
 ```
+
+Any argument goes to `review`, so nothing about the one-shot form changed — only bare `kalee`
+on a terminal is new.
 
 Useful flags:
 
@@ -125,7 +158,9 @@ Useful flags:
 Other commands:
 
 ```sh
-kalee ask "which files handle auth?"    # raw harness access — proves the core is general
+kalee repl                              # the same interactive session, explicitly
+kalee --continue                        # resume the most recent session here
+kalee ask "which files handle auth?"    # one-shot harness access — proves the core is general
 kalee models                            # registry + resolved capabilities
 kalee doctor local-qwen7b               # probe a backend, write real caps back to models.yaml
 kalee eval run                          # score recall/precision against the fixtures
@@ -160,6 +195,44 @@ roles:
   scan:   opus-5
   verify: haiku-4-5
 ```
+
+---
+
+## The session
+
+`kalee` with no arguments starts a conversation in the current repository. It is read-only:
+there is no edit tool in the harness at all, and `bash` is the only tool that is not read-only,
+so the default permission mode is `ask` — read-only tools run, a shell command asks first.
+
+| Command | |
+|---|---|
+| `/review [target]` | run the real scan→verify pipeline; the findings stay in context |
+| `/model [id]` | list the registry, or switch model mid-session |
+| `/effort low\|medium\|high\|max` | reasoning effort |
+| `/permission readonly\|ask\|auto\|deny` | what tools are allowed |
+| `/skills`, `/skill <name>` | list skills, load one's body into context |
+| `/compact` | summarize the conversation and continue in a smaller context |
+| `/clear`, `/sessions`, `/resume <id>` | conversation management |
+| `/cost`, `/tools`, `/trace` | what this session has spent, reached for, and recorded |
+| `!<command>` | run a shell command; the output stays in context |
+
+Ctrl-C interrupts a running turn without ending the session; Ctrl-D exits.
+
+Three things make it more than a loop around `kalee ask`:
+
+**`/review` findings become context.** The pipeline runs in a forked session — it needs its own
+review identity and must not inherit the chat — but its findings are handed back to the
+conversation, so "why is that one wrong?" is answerable without re-running anything.
+
+**The prefix is cached across turns.** Identity, skills manifest and repo map are built once and
+marked stable, so every turn after the first reads them from the provider's cache. `/cost` shows
+the cached share.
+
+**It compacts before it overflows.** Above 70% of the model's context window the older turns are
+summarized and the conversation continues in a fresh session — the point at which a 32k local
+model would otherwise start erroring, several exchanges before an Opus-class one does.
+
+Sessions persist to `.kalee/sessions/`, so `kalee --continue` picks up where you left off.
 
 ---
 

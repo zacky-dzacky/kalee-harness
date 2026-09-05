@@ -25,6 +25,15 @@ real work happens; it must not require a rebuild.
 mode — a prompt prefix that changes every run, so the cache silently never hits — costs money
 and produces no error. Never work around the builder's ordering check.
 
+**There is exactly one owner of stdin.** `repl/input.ts` is it. Two readline interfaces, or a
+readline interface alongside `for await (const line of console)`, do not fail — they split the
+user's keystrokes between them, which is the kind of bug you chase for an hour. Every prompt,
+including a permission confirmation raised from inside an agent turn, goes through `LineReader`.
+
+**A session is append-only, so compaction forks.** `/compact` writes a *new* session seeded with
+the summary rather than rewriting the old one. Do not add an edit path to `Session` to avoid
+that — the append-only property is what keeps cache breakpoints and reasoning replay valid.
+
 **Capabilities are probed, not declared.** `caps` in `models.yaml` for a local backend is a
 guess until `kalee doctor <model>` has run. Two models behind the same Ollama endpoint can
 differ on tool calling.
@@ -43,6 +52,7 @@ differ on tool calling.
 | Active context / Session state / Durable memory | `core/session.ts` | ✅ (memory later) |
 | Agent loop / Multi-agent / Handoff / Task pipeline | `core/loop.ts` + `review/pipeline.ts` | ✅ |
 | Caching & compression | `CacheSpan` + `core/compact.ts` | ✅ (learned routing later) |
+| Interactive frontend | `src/repl/` | ✅ |
 | Benchmark grounding / Readiness / Regression | `src/eval/` | ✅ |
 | Execution traces / Cost & latency / Failure attribution | `core/trace.ts` | ✅ |
 | Permission control / Policy / Audit / Guardrails | `core/policy.ts` | ✅ |
@@ -50,6 +60,12 @@ differ on tool calling.
 ## Commands
 
 ```
+kalee                                 # interactive session (bare invocation, on a TTY)
+kalee repl [--continue | --resume <id>]
+  /review [target]                    # the real pipeline; findings stay in context
+  /model /effort /permission /skill /compact /clear /sessions /cost /tools /trace
+  !<command>                          # shell through the gated bash tool
+
 kalee review                          # working tree vs HEAD
 kalee review --staged
 kalee review --base main              # merge-base(main, HEAD)..HEAD
@@ -68,7 +84,9 @@ kalee eval run | sweep | list
 kalee trace <session-id>
 ```
 
-`kalee review` exits non-zero when any finding is `confirmed`, so CI can gate on it.
+`kalee review` exits non-zero when any finding is `confirmed`, so CI can gate on it. Bare
+`kalee` on a TTY opens the session; **any** argument still routes to `review`, which is what
+keeps `kalee --base main` and a piped `kalee` in CI behaving as before.
 
 ## Quality gate
 

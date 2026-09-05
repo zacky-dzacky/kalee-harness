@@ -15,7 +15,7 @@ import { Policy, readonlyPolicy, type PermissionMode } from "./core/policy.ts";
 import { Session } from "./core/session.ts";
 import { newId, Trace } from "./core/trace.ts";
 import { defaultRegistry } from "./tools/index.ts";
-import { resolveTarget, type TargetSpec } from "./review/target.ts";
+import { resolveTarget, specFrom, type TargetSpec } from "./review/target.ts";
 import { review } from "./review/pipeline.ts";
 import { renderTerminal } from "./review/render/terminal.ts";
 import { renderJson } from "./review/render/json.ts";
@@ -23,6 +23,8 @@ import { renderMarkdown } from "./review/render/markdown.ts";
 import { postReview } from "./review/render/github.ts";
 import { listCases, pct, runEval } from "./eval/run.ts";
 import { sweep } from "./eval/sweep.ts";
+import { startRepl } from "./repl/repl.ts";
+import { LineReader } from "./repl/input.ts";
 
 const program = new Command();
 
@@ -167,11 +169,7 @@ interface ReviewFlags {
 }
 
 function targetSpec(arg: string | undefined, flags: ReviewFlags): TargetSpec {
-  if (flags.staged) return { kind: "staged" };
-  if (flags.base) return { kind: "range", base: flags.base };
-  if (arg === undefined) return { kind: "working-tree" };
-  if (/^\d+$/.test(arg)) return { kind: "pr", number: Number(arg), repo: flags.repo };
-  return { kind: "path", path: arg };
+  return specFrom(arg, flags);
 }
 
 function parseRoleModels(spec: string | undefined): Partial<Record<Role, string>> {
@@ -253,6 +251,45 @@ program
     );
     if (result.haltReason) console.error(pc.yellow(`halted: ${result.haltReason}`));
   });
+
+// ---------------------------------------------------------------------------
+// kalee repl — the interactive session. Bare `kalee` on a TTY lands here.
+// ---------------------------------------------------------------------------
+
+program
+  .command("repl")
+  .description("Start an interactive session in this repository")
+  .option("--model <id>", "model to use")
+  .option("--role-model <spec>", "per-role models for /review, e.g. scan=opus-5,verify=haiku-4-5")
+  .addOption(new Option("--effort <level>").choices([...EFFORTS]))
+  .addOption(
+    new Option("--permission-mode <mode>").choices(["readonly", "ask", "auto", "deny"]),
+  )
+  .option("--continue", "resume the most recent session in this repository")
+  .option("--resume <id>", "resume a specific session")
+  .option("--max-cost <usd>", "cap spend for the whole session", Number)
+  .action(async (flags: ReplFlags) => {
+    await startRepl({
+      cwd: process.cwd(),
+      model: flags.model,
+      roleModels: parseRoleModels(flags.roleModel),
+      effort: flags.effort,
+      permissionMode: flags.permissionMode,
+      resume: flags.resume,
+      continueLatest: flags.continue,
+      maxCost: flags.maxCost,
+    });
+  });
+
+interface ReplFlags {
+  model?: string;
+  roleModel?: string;
+  effort?: Effort;
+  permissionMode?: PermissionMode;
+  continue?: boolean;
+  resume?: string;
+  maxCost?: number;
+}
 
 // ---------------------------------------------------------------------------
 // kalee models / doctor
@@ -496,12 +533,24 @@ function fatal(msg: string): never {
   process.exit(2);
 }
 
-async function ask(question: string): Promise<boolean> {
-  process.stderr.write(question);
-  for await (const line of console) {
-    return /^y(es)?$/i.test(line.trim());
-  }
-  return false;
+/**
+ * One stdin owner per process, created on first use.
+ *
+ * The obvious `for await (const line of console)` consumes the *global* stdin iterator, which
+ * is fine exactly once — and the REPL needs a readline interface on the same descriptor. Two
+ * readers do not fail loudly; they split the user's keystrokes. So both paths share this.
+ */
+let sharedReader: LineReader | null = null;
+
+function ask(question: string): Promise<boolean> {
+  // stderr, so a permission prompt never contaminates `--format json` on stdout.
+  sharedReader ??= new LineReader({ output: process.stderr });
+  return sharedReader.confirm(question);
+}
+
+/** In a function body, so control-flow analysis does not narrow the module-level `let`. */
+function closeReader(): void {
+  sharedReader?.close();
 }
 
 function confirmTool(tool: string, effect: string, input: unknown): Promise<boolean> {
@@ -511,9 +560,19 @@ function confirmTool(tool: string, effect: string, input: unknown): Promise<bool
   );
 }
 
+/**
+ * Bare `kalee` on a terminal opens the interactive session. Anything with an argument still
+ * falls through to commander's default `review` command, so `kalee --base main`, `kalee 1234`
+ * and a piped `kalee` in CI behave exactly as before.
+ */
+function wantsRepl(): boolean {
+  return process.argv.length === 2 && Boolean(process.stdin.isTTY);
+}
+
 // Provider failures are expected operating conditions, not crashes; report them as such.
 try {
-  await program.parseAsync(process.argv);
+  if (wantsRepl()) await startRepl({ cwd: process.cwd() });
+  else await program.parseAsync(process.argv);
 } catch (e) {
   if (e instanceof ProviderError) {
     console.error(pc.red(`\n${e.provider} ${e.kind}: ${e.message}`));
@@ -525,4 +584,7 @@ try {
   console.error(pc.red(`\nerror: ${(e as Error).message ?? String(e)}`));
   if (process.env.KALEE_DEBUG) console.error(e);
   process.exit(1);
+} finally {
+  // An open readline interface holds the event loop open and the process never exits.
+  closeReader();
 }

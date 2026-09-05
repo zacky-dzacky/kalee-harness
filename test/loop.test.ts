@@ -262,3 +262,112 @@ describe("agent loop", () => {
     expect(emitted).toEqual([{ v: "hello" }]);
   });
 });
+
+describe("live tool feedback", () => {
+  test("reports every call as start then end, with a preview of the result", async () => {
+    const a = tracker("alpha");
+    const provider = new ScriptProvider([
+      [call("1", "alpha", { value: "x" })],
+      [{ type: "text", text: "done" }],
+    ]);
+
+    const events: string[] = [];
+    let preview: string | undefined;
+    await runLoop({
+      ...base(provider, [a.tool]),
+      onTool: (e) => {
+        events.push(`${e.name}:${e.phase}`);
+        if (e.phase === "end") preview = e.preview;
+      },
+    });
+
+    expect(events).toEqual(["alpha:start", "alpha:end"]);
+    expect(preview).toBe("alpha ok");
+  });
+
+  test("closes the call even when policy denies it", async () => {
+    const shell: Tool = {
+      name: "shell",
+      description: "test",
+      schema: z.object({ value: z.string() }),
+      effect: "external",
+      parallelSafe: false,
+      async call() {
+        throw new Error("must never run");
+      },
+    };
+    const provider = new ScriptProvider([
+      [call("1", "shell", { value: "x" })],
+      [{ type: "text", text: "done" }],
+    ]);
+
+    const events: { phase: string; isError?: boolean }[] = [];
+    await runLoop({
+      ...base(provider, [shell]),
+      policy: new Policy({ mode: "readonly" }),
+      onTool: (e) => events.push({ phase: e.phase, isError: e.isError }),
+    });
+
+    // A frontend that draws a spinner on `start` must always get its `end`, whatever the
+    // outcome — otherwise a denied call spins forever.
+    expect(events.map((e) => e.phase)).toEqual(["start", "end"]);
+    expect(events[1]!.isError).toBe(true);
+  });
+});
+
+describe("interruption", () => {
+  /** A provider that streams a little, then hangs until the caller gives up. */
+  class HangingProvider implements ModelProvider {
+    readonly id = "hanging";
+    readonly kind = "script";
+    readonly apiModel = "script";
+    readonly pricing: Pricing = { input: 1, output: 1 };
+    readonly caps: Capabilities = { ...DEFAULT_CAPS, nativeToolCalls: true };
+
+    constructor(private readonly onHang: () => void) {}
+
+    async *stream(_req: Request, signal: AbortSignal): AsyncIterable<Event> {
+      yield { type: "text_delta", text: "partial answer" };
+      this.onHang();
+      await new Promise<void>((_resolve, reject) => {
+        const stop = () => reject(new Error("aborted"));
+        // The loop's own controller is aborted synchronously by the caller's, so by the time
+        // we get here the signal may already be spent.
+        if (signal.aborted) stop();
+        else signal.addEventListener("abort", stop, { once: true });
+      });
+    }
+
+    async countTokens(): Promise<number> {
+      return 10;
+    }
+  }
+
+  test("a caller abort halts cleanly instead of surfacing as a provider error", async () => {
+    const ctl = new AbortController();
+    const provider = new HangingProvider(() => ctl.abort());
+
+    const result = await runLoop({ ...base(provider, []), signal: ctl.signal });
+
+    // Ctrl-C is a user action. Reporting it as a network failure sends people debugging their
+    // connection.
+    expect(result.haltReason).toBe("interrupted");
+    expect(result.text).toBe("partial answer");
+  });
+
+  test("leaves a replayable transcript after an interrupt", async () => {
+    const ctl = new AbortController();
+    const provider = new HangingProvider(() => ctl.abort());
+    const opts = base(provider, []);
+    opts.session.user([{ type: "text", text: "hello" }]);
+
+    await runLoop({ ...opts, signal: ctl.signal });
+
+    const turns = opts.session.transcript();
+    // Strict alternation, and no tool_call left without its result: both are hard API errors
+    // on the next turn, which would only show up after the user typed their follow-up.
+    expect(turns.map((t) => t.role)).toEqual(["user", "assistant"]);
+    expect(turns.at(-1)!.blocks.every((b) => b.type === "text")).toBe(true);
+    expect(turns.at(-1)!.blocks).toHaveLength(1);
+  });
+});

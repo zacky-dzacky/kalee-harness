@@ -128,7 +128,9 @@ export const now = () => new Date().toISOString();
 
 export function newId(): string {
   const d = new Date();
-  const stamp = d.toISOString().replace(/[-:T]/g, "").slice(0, 15);
+  // 14, not 15: the 15th character of a stripped ISO timestamp is the fractional-seconds
+  // dot, and `Session.fork` uses a dot to mark a sub-agent session (`<id>.<pass>`).
+  const stamp = d.toISOString().replace(/[-:T]/g, "").slice(0, 14);
   return `${stamp}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
