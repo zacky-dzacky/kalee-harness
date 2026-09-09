@@ -121,6 +121,6 @@ models:
 # Role-based assignment. Scan and verify are separate contexts already, so per-role models
 # cost nothing in cache invalidation and unlock `kalee eval sweep`.
 roles:
-  scan: opus-5
-  verify: opus-5
-  default: opus-5
+  scan: local-qwen7b
+  verify: local-qwen7b
+  default: local-qwen7b
