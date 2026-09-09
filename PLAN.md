@@ -3,7 +3,7 @@
 ## Context
 
 You want your own agent harness ("Kalee Harness") in the spirit of Claude Code, structured around the
-layer diagram in `LAYERS.md` / `harness_layer.jpeg`. Building every layer at once produces a framework
+layer diagram in `LAYERS.md`. Building every layer at once produces a framework
 with nothing running on it, so v1 narrows to **one capability — code review**, chosen deliberately:
 review needs *only read-only tools* (so the Sandbox layer is trivially safe in v1) and it needs
 *multi-pass orchestration* (scan → verify), which forces the Agent Loop and Orchestration layers to be
@@ -15,8 +15,40 @@ provider wire format leaking above the provider boundary.
 Target outcome: `kalee review --base main` produces ranked, verified findings with `file:line`, on a
 harness whose module boundaries match your diagram and whose model backend is swappable by config.
 
-Decisions: **TypeScript on Bun** · **one-shot command** (REPL later on the same core) · targets =
-**local git diff**, **arbitrary path**, **GitHub PR via `gh`**.
+Decisions: **TypeScript on Bun** · **one-shot command** (the REPL later landed on the same core, as
+planned) · targets = **local git diff**, **arbitrary path**, **GitHub PR via `gh`**.
+
+---
+
+## Current state — 2026-09-09
+
+**v1 is built.** M0–M9 are all complete, and the REPL that this plan deferred to "later" exists as
+well. `bun test` passes **172 tests** (1 skipped: the live cache-regression test, which needs
+`KALEE_LIVE_CACHE=1`), `tsc --noEmit` is clean, and `bun run build` produces `dist/kalee`. ~9.5k
+lines across `src/` and `test/`.
+
+Running today:
+
+- All three native adapters (`anthropic.ts`, `openai.ts`, `google.ts`) plus `shim.ts`, behind the
+  one conformance suite (`test/conformance.ts`) every adapter must pass.
+- The agent loop, seven read-only tools plus the policy-gated `bash` escape hatch, the
+  scan → verify review pipeline, all four renderers, `kalee doctor`, and all eight eval fixtures.
+- All five review targets: working tree, staged, range, path, GitHub PR.
+- An interactive REPL (`kalee repl`) with 15 slash commands, session resume, and `/review`.
+
+Three deliberate divergences from the plan as written below:
+
+- **`roles:` in `models.yaml` currently points every role at `local-qwen7b`**, not
+  `scan: opus-5 / verify: local-qwen`. That is a local-development default, not the intended
+  production assignment — override per run with `--role-model`, or edit the registry.
+- **Three modules exist that the skeleton did not name.** `core/roots.ts` — the runtime-data
+  discipline needed its own resolver, because inside a `bun build --compile` binary
+  `import.meta.url` is a virtual path and deriving `prompts/` from the source location finds
+  nothing. `core/config.ts` — the `~/.kalee` + `.kalee` merge. `src/repl/` — four modules.
+- **`core/text.ts` and `core/index.ts`** are small shared helpers that fell out of the REPL work.
+
+Still deferred, unchanged from the plan: MCP tool discovery, durable memory, code substrate,
+`sandbox-exec`/landlock behind `tools/exec.ts`, and learned cache routing.
 
 ---
 
@@ -65,42 +97,51 @@ kalee_harness/
 │   ├── model/
 │   │   ├── ir.ts                 # canonical IR — the contract
 │   │   ├── provider.ts           # ModelProvider interface, Capabilities, Pricing
-│   │   └── registry.ts           # models.yaml loader + role resolution
+│   │   ├── registry.ts           # models.yaml loader + role resolution
+│   │   └── doctor.ts             # capability probing, writes caps back to models.yaml
 │   ├── providers/
 │   │   ├── anthropic.ts          # @anthropic-ai/sdk
 │   │   ├── openai.ts             # openai — also Ollama, MLX, LM Studio, vLLM, OpenRouter
 │   │   ├── google.ts             # @google/genai
-│   │   └── shim.ts               # text tool-call protocol for models without native tool use
+│   │   ├── shim.ts               # text tool-call protocol for models without native tool use
+│   │   └── index.ts              # registry entry -> provider construction
 │   ├── core/
 │   │   ├── loop.ts               # the agent loop
 │   │   ├── context.ts            # compiled context
 │   │   ├── identity.ts · skills.ts · session.ts
-│   │   ├── policy.ts · trace.ts · budget.ts
+│   │   ├── policy.ts · trace.ts · budget.ts · compact.ts
+│   │   ├── roots.ts              # runtime-data discovery (survives --compile)   [unplanned]
+│   │   ├── config.ts             # ~/.kalee + .kalee merge                       [unplanned]
+│   │   └── text.ts · index.ts    # shared helpers                                [unplanned]
 │   ├── tools/                    # Tool interface + read-only builtins + sandboxed exec
 │   ├── review/                   # the code-review capability (deterministic half)
+│   ├── repl/                     # interactive session: repl · commands · input · render
 │   └── eval/                     # fixture scoring + cross-provider sweeps
 ├── skills/code-review/SKILL.md   # the code-review capability (behavioral half)
-├── prompts/{identity,verify}.md
-└── fixtures/                     # eval repos with seeded bugs + expected.json
+├── prompts/{identity,verify,repl}.md
+├── fixtures/                     # 8 eval repos with seeded bugs + expected.json
+├── test/                         # 13 files, 173 tests
+└── .kalee/{sessions,traces}/     # append-only JSONL, written at run time
 ```
 
 ### Layer → module map (keep this visible in the code)
 
-| `LAYERS.md` box | Module | v1 |
+| `LAYERS.md` box | Module | Status |
 |---|---|---|
-| Durable identity | `prompts/identity.md` + `core/identity.ts` | ✅ |
-| Loadable skills | `core/skills.ts` (frontmatter + progressive disclosure) | ✅ |
-| Compiled context | `core/context.ts` | ✅ |
-| Adaptation limits | `core/budget.ts` (turn/token/wallclock caps) | ✅ |
-| Sandbox runtime / Resource bounds / OS permissions | `tools/exec.ts` (cwd jail, timeout, output cap, denylist) | partial |
+| Durable identity | `prompts/identity.md` + `core/identity.ts` (+ `prompts/repl.md`) | ✅ built |
+| Loadable skills | `core/skills.ts` (frontmatter + progressive disclosure) | ✅ built |
+| Compiled context | `core/context.ts` | ✅ built |
+| Adaptation limits | `core/budget.ts` (turn/token/wallclock/cost caps) | ✅ built |
+| Sandbox runtime / Resource bounds / OS permissions | `tools/exec.ts` (cwd jail, process-group timeout, output cap, denylist) | partial — `sandbox-exec`/landlock still to drop in behind the same interface |
 | Code substrate | — | later |
-| Tool schema / Protocol / Discovery / Routing | `tools/` + zod schemas | ✅ (MCP later) |
-| Active context / Session state / Durable memory / State artifacts | `core/session.ts` | ✅ (memory later) |
-| Agent loop / Multi-agent / Handoff / Task pipeline | `core/loop.ts` + `review/pipeline.ts` | ✅ |
-| Caching & compression | `CacheSpan` + `core/compact.ts` | ✅ (learned routing later) |
-| Benchmark grounding / Readiness / Regression | `src/eval/` | ✅ |
-| Execution traces / Cost & latency / Failure attribution | `core/trace.ts` | ✅ |
-| Permission control / Policy / Audit / Guardrails | `core/policy.ts` | ✅ |
+| Tool schema / Protocol / Discovery / Routing | `tools/` + zod schemas | ✅ built (MCP discovery later) |
+| Active context / Session state / Durable memory / State artifacts | `core/session.ts` (+ `/resume`, `/compact`) | ✅ built (cross-session memory later) |
+| Agent loop / Multi-agent / Handoff / Task pipeline | `core/loop.ts` + `review/pipeline.ts` | ✅ built |
+| Caching & compression | `CacheSpan` + `core/compact.ts` | ✅ built (learned routing later) |
+| Benchmark grounding / Readiness / Regression | `src/eval/` + 8 fixtures | ✅ built |
+| Execution traces / Cost & latency / Failure attribution | `core/trace.ts` | ✅ built |
+| Permission control / Policy / Audit / Guardrails | `core/policy.ts` | ✅ built |
+| *(no box — falls out of the core)* | `src/repl/` interactive session | ✅ built, beyond v1 scope |
 
 ---
 
@@ -243,6 +284,11 @@ roles:
   verify: local-qwen    # cheap, high volume, narrow question
 ```
 
+The shipped `models.yaml` matches this shape and carries eight entries (`opus-5`, `sonnet-5`,
+`haiku-4-5`, `gpt-5`, `gemini-3-pro`, `local-qwen7b`, `local-qwen`, `mlx-devstral`). Its `roles:`
+block currently points every role at `local-qwen7b` — a local-development default, not the
+assignment above. Override per run with `--role-model scan=opus-5,verify=haiku-4-5`.
+
 **Role-based model assignment** falls out of the design and is genuinely useful. Caches are provider-
 and model-scoped, so switching models mid-session would invalidate them — but scan and verify are
 already separate contexts, so per-role models cost nothing and unlock the eval sweep below.
@@ -365,9 +411,14 @@ kalee review src/auth/            # path mode (no diff signal — different prom
 kalee models                      # registry + resolved capabilities
 kalee doctor <model>              # probe a backend, write caps back to models.yaml
 kalee ask "<prompt>"              # raw harness access — proves the core is general
-kalee eval run | sweep
+kalee eval run | sweep | list
 kalee trace <session-id>
+kalee repl                        # interactive session (was "later"; shipped)
 ```
+
+All of the above exist. `kalee repl` carries 15 slash commands — `/help /exit /model /effort
+/permission /review /cost /tools /skills /skill /clear /compact /trace /sessions /resume` — plus
+`--continue` / `--resume <id>` and a session-wide `--max-cost`.
 
 Config: `~/.kalee/config.yaml` merged with `.kalee/config.yaml`; `KALEE.md` is the project identity
 overlay; `models.yaml` is the registry.
@@ -387,26 +438,46 @@ never a bundled local tokenizer, which would be wrong for every model but one.
 
 ## Milestones
 
-| # | Deliverable | Done when |
-|---|---|---|
-| M0 | Repo + IR + `anthropic.ts` | `kalee ask "hi"` streams tokens |
-| M1 | `openai.ts` + **provider conformance suite** | Suite passes on both; `kalee ask --model local-qwen` works against Ollama |
-| M2 | Tool interface + read-only builtins + agent loop | `kalee ask "how many TS files, and the largest?"` completes via tool calls on **both** backends |
-| M3 | Review scan pass + git-diff target | `kalee review --base main` prints unverified findings |
-| M4 | Verify pass + role models + renderers | `--format json` emits verdict-carrying findings; rejects dropped |
-| M5 | `google.ts` (Gemini) | Third wire format passes the same conformance suite unchanged |
-| M6 | `shim.ts` + `kalee doctor` | A model with `nativeToolCalls: false` on MLX completes a full review |
-| M7 | policy + trace + budget + context chunking | Trace shows per-tool effect/cost/latency; a 60k diff reviews on a 32k model |
-| M8 | `eval run` + 8 fixtures + `sweep` | Recall/precision per model; clean diffs score 0 findings |
-| M9 | Path target + `gh` PR target + `--comment` | `kalee review 1234 --comment` posts inline comments |
+| # | Deliverable | Done when | Status |
+|---|---|---|---|
+| M0 | Repo + IR + `anthropic.ts` | `kalee ask "hi"` streams tokens | ✅ |
+| M1 | `openai.ts` + **provider conformance suite** | Suite passes on both; `kalee ask --model local-qwen` works against Ollama | ✅ `test/conformance.ts` |
+| M2 | Tool interface + read-only builtins + agent loop | `kalee ask "how many TS files, and the largest?"` completes via tool calls on **both** backends | ✅ |
+| M3 | Review scan pass + git-diff target | `kalee review --base main` prints unverified findings | ✅ |
+| M4 | Verify pass + role models + renderers | `--format json` emits verdict-carrying findings; rejects dropped | ✅ 4 renderers |
+| M5 | `google.ts` (Gemini) | Third wire format passes the same conformance suite unchanged | ✅ |
+| M6 | `shim.ts` + `kalee doctor` | A model with `nativeToolCalls: false` on MLX completes a full review | ✅ shim tested; `mlx-devstral` in registry |
+| M7 | policy + trace + budget + context chunking | Trace shows per-tool effect/cost/latency; a 60k diff reviews on a 32k model | ✅ `test/chunking.test.ts` |
+| M8 | `eval run` + 8 fixtures + `sweep` | Recall/precision per model; clean diffs score 0 findings | ✅ 6 bug fixtures + 2 clean |
+| M9 | Path target + `gh` PR target + `--comment` | `kalee review 1234 --comment` posts inline comments | ✅ all 5 targets |
+| M10 | `kalee repl` | Interactive session on the same core, with `/review` and resume | ✅ beyond original v1 scope |
 
 M0–M4 is the useful product. Building the **conformance suite at M1 rather than last** is the key
 sequencing decision: it's what makes M5 and M6 cheap and safe, and retrofitting an abstraction after
-the core has grown around one provider is the standard way this design fails.
+the core has grown around one provider is the standard way this design fails. That held — M5 and M6
+landed against an unchanged suite.
+
+**Next, in rough order of value:** point `roles:` at real models and run `kalee eval sweep` to get
+the first quality-per-dollar numbers; a live `kalee doctor` pass against Ollama and `mlx_lm.server`
+so the local caps are measured rather than guessed; then the deferred layers — MCP tool discovery,
+durable memory, and `sandbox-exec` behind `tools/exec.ts`.
 
 ---
 
 ## Verification
+
+Status as of 2026-09-09: `bun test` → **172 pass, 1 skip, 0 fail** across 13 files;
+`tsc --noEmit` clean. The one skip is the live cache-regression test, which is gated behind
+`KALEE_LIVE_CACHE=1` because it costs real Anthropic tokens. Everything below marked ✅ is
+automated and green; the unmarked items need a live backend and have not been exercised yet.
+
+- ✅ `test/conformance.test.ts` · `test/shim.test.ts` · `test/loop.test.ts` · `test/pipeline.test.ts`
+  · `test/target.test.ts` · `test/git-tools.test.ts` · `test/jail.test.ts` · `test/exec.test.ts` ·
+  `test/chunking.test.ts` · `test/roots.test.ts` · `test/repl.test.ts` · `test/core.test.ts`,
+  against `test/fake-server.ts` rather than live providers.
+- ⏳ Not yet run live: the cache-read assertion (`KALEE_LIVE_CACHE=1`), `kalee doctor` against a real
+  Ollama/MLX endpoint, and `kalee eval run` / `sweep` for actual recall-precision numbers. Until the
+  sweep runs, the quality gate below is defined but not enforcing.
 
 - **Provider conformance suite** (the important one): one battery every adapter must pass — streams
   text deltas; emits a well-formed tool call; round-trips a tool result; reports usage; surfaces
